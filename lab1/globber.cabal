@@ -1,0 +1,38 @@
+name:           globber
+version:        1.0.0
+synopsis:       Stanford CS240h Lab 1.
+build-type:     Simple
+cabal-version:  >= 1.10
+
+extra-source-files:
+  README.md
+
+library
+  default-language:
+    Haskell2010
+  exposed-modules:
+    Main
+  build-depends:
+    base < 5
+    , QuickCheck >= 2.0
+    , doctest >= 0.9.7
+  ghc-options: -Wall
+
+test-suite            doctests
+  type:
+                      exitcode-stdio-1.0
+
+  main-is:
+                      doctests.hs
+
+  default-language:
+                      Haskell2010
+
+  build-depends:
+                      base < 5 && >= 3
+                      , doctest >= 0.9.7
+                      , QuickCheck >= 2.0
+
+  ghc-options:
+                      -Wall
+                      -threaded
