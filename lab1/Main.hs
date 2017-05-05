@@ -1,20 +1,13 @@
-{-# OPTIONS_GHC -Wno-unused-binds #-}
-
 module Main (main, matchGlob) where
 
-import Data.Char (chr, ord)
-
+--import Parser
+import GlobParser
 -- $setup
 -- >>> :set -XOverloadedStrings
 -- >>> import Data.Char(isUpper)
 
 main :: IO()
 main = undefined
-
-specials :: String
-specials = "?*\\["
-
-type GlobPattern = String
 
 -- | matchGlob
 -- >>> matchGlob "abcde" "abcde"
@@ -68,122 +61,14 @@ type GlobPattern = String
 -- >>> matchGlob "[abc-]" "c"
 -- True
 matchGlob :: GlobPattern -> String -> Bool
-matchGlob _ _ = False
-
-type Input = String
-data ParseError = Failed deriving (Eq, Show)
-data ParseResult a = ErrorResult ParseError | Result Input a deriving Eq
-
-instance Show a => Show (ParseResult a) where
-  show (ErrorResult e) = show e
-  show (Result i a) = "Result >" ++ i ++ "< " ++ show a
-
-showRes :: Show a => ParseResult a -> String
-showRes (ErrorResult e) = show e
-showRes (Result _ a) = show a
-
-newtype Parser a = P {
-  parse :: Input -> ParseResult a
-}
-
--- | Consume no input, succeed with given value
-valueParser :: a -> Parser a
-valueParser out = P (`Result` out)
-
-failed :: Parser a
-failed = P (\_ -> ErrorResult Failed)
-
--- | Consume a character, fail if input is empty
-charParser :: Parser Char
-charParser = P (\inp -> case inp of
-                         [] -> ErrorResult Failed
-                         (c:cs) -> Result cs c)
+matchGlob ptrn inp = inpOK
+  where
+    stringParser = parse globParser ptrn
+    inpOK = case stringParser of
+              ErrorResult _ -> False
+              Result _ stringParser' -> case parse stringParser' inp of
+                                          ErrorResult _ -> False
+                                          Result _ inp' -> inp' == inp
 
 
--- | Consume and discard input from first parser, continue with second parser
-(>>>) :: Parser a -> Parser b -> Parser b
-pa >>> pb = pa >>= const pb
-
--- | Try the first parser, and if it fails, try the second
-(|||) :: Parser a -> Parser a -> Parser a
-(|||) p1 p2 = P (\inp -> case parse p1 inp of
-                           ErrorResult _ -> parse p2 inp
-                           Result i a -> Result i a)
-
-infixl 3 |||
-
--- | Parse 0 or more values
-list :: Parser a -> Parser [a]
-list pa = list1 pa ||| valueParser []
-
--- | Parse 1 or more values
-list1 :: Parser a -> Parser [a]
-list1 pa = pa >>= (\a -> list pa >>= (\as -> valueParser $ a:as))
-
--- | Parse 0 or more strings, concatenate result
-concatLi :: Parser String -> Parser String
-concatLi pa = concatLi1 pa ||| valueParser []
-
--- | Parse 1 or more strings, concatenate result
-concatLi1 :: Parser String -> Parser String
-concatLi1 pa = list1 pa >>= (valueParser . concat)
-
-satisfy :: (Char -> Bool) -> Parser Char
-satisfy p = charParser >>= (\a -> if p a then valueParser a else failed)
-
-is :: Char -> Parser Char
-is c = satisfy (==c)
-
-oneOf :: String -> Parser Char
-oneOf str = satisfy (`elem` str)
-
-noneOf :: String -> Parser Char
-noneOf str = satisfy (`notElem` str)
-
-betweenChars :: Char -> Char -> Parser a -> Parser a
-betweenChars l r pa = is l *> pa <* is r
-
-parseLit :: Parser Char
-parseLit = noneOf specials
-
--- | Parser for "?" pattern
-parseWildcard1 :: Parser Char
-parseWildcard1 = charParser
-
--- | Parser for "*" pattern
-parseWildcard :: Parser String
-parseWildcard = list charParser
-
--- Note that we don't treat ] as a special character unless we are trying to close a set match.
--- | Parse set pattern
-parseSet :: Parser String
-parseSet = betweenChars '[' ']' $ concatLi parsePtrnNoSet
-
-parsePtrnNoSet :: Parser String
-parsePtrnNoSet = undefined
-
-parsePtrn :: Parser String
-parsePtrn = parseSet ||| failed
-
-parseRange :: String -> Parser String
-parseRange ptrn = undefined -- ord chr
-
-instance Functor Parser where
-  --fmap :: (a -> b) -> Parser a -> Parser b
-  fmap f pa = pa >>= (valueParser . f)
-
-instance Applicative Parser where
-  pure = valueParser
-  --(<*>) :: Parser (a -> b) -> Parser a -> Parser b
-  (<*>) pf pa = pf >>= (\f -> pa >>= (valueParser . f))
-
-instance Monad Parser where
-  -- (>>=) :: Parser a -> (a -> Parser b) -> Parser b
-  (>>=) pa f = flBindP f pa
-
-flBindP :: (a -> Parser b) -> Parser a -> Parser b
-flBindP f pa = P (\inp -> case parse pa inp of
-                          ErrorResult e -> ErrorResult e
-                          Result i a -> parse (f a) i)
-
-
+type GlobPattern = String

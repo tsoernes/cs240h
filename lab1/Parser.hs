@@ -1,78 +1,15 @@
 {-# OPTIONS_GHC -Wno-unused-binds #-}
 
-module Main (main, matchGlob) where
-
-import Data.Char (chr, ord)
-
--- $setup
--- >>> :set -XOverloadedStrings
--- >>> import Data.Char(isUpper)
-
-main :: IO()
-main = undefined
-
-specials :: String
-specials = "?*\\["
-
-type GlobPattern = String
-
--- | matchGlob
--- >>> matchGlob "abcde" "abcde"
--- True
--- >>> matchGlob "abcde" "abcd"
--- False
--- >>> matchGlob "a]b" "a]b"
--- True
--- >>> matchGlob "a[b" "a[b"
--- False
--- >>> matchGlob "\a\b\c\d\e" "abcde"
--- True
--- >>> matchGlob "-adf]ai1" "-adf]ai1"
--- True
--- >>> matchGlob "\[a]" "[a]"
--- True
--- >>> matchGlob "\*\*\?" "**?"
--- True
--- >>> matchGlob "\\a\\" "\a\"
--- True
--- >>> matchGlob "ab\*ba" "ab*ba"
--- True
--- >>> matchGlob "ab\[ba" "ab[ba"
--- True
--- >>> matchGlob "ab[a\]]ba" "ab]ba"
--- True
--- >>> matchGlob "ab[a\]]ba" "ababa"
--- True
--- >>> matchGlob "[ab[c]" "c"
--- True
--- >>> matchGlob "[ab[c]" "["
--- True
--- >>> matchGlob "[a-z]" "b"
--- True
--- >>> matchGlob "[a-z]" "0"
--- False
--- >>> matchGlob "[---]" "-"
--- True
--- >>> matchGlob "[a-c-z]" "b"
--- True
--- >>> matchGlob "[a-c-z]" "d"
--- False
--- >>> matchGlob "[a-c-z]" "-"
--- True
--- >>> matchGlob "[a-c-z]" "z"
--- True
--- >>> matchGlob "[z-a]" "a"
--- False
--- >>> matchGlob "[abc-]" "-"
--- True
--- >>> matchGlob "[abc-]" "c"
--- True
-matchGlob :: GlobPattern -> String -> Bool
-matchGlob _ _ = False
+module Parser where
 
 type Input = String
-data ParseError = Failed deriving (Eq, Show)
-data ParseResult a = ErrorResult ParseError | Result Input a deriving Eq
+
+data ParseError = Failed
+  deriving (Eq, Show)
+
+data ParseResult a = ErrorResult ParseError
+                   | Result Input a
+                   deriving Eq
 
 instance Show a => Show (ParseResult a) where
   show (ErrorResult e) = show e
@@ -83,13 +20,14 @@ showRes (ErrorResult e) = show e
 showRes (Result _ a) = show a
 
 newtype Parser a = P {
-  parse :: Input -> ParseResult a
-}
+                     parse :: Input -> ParseResult a
+                     }
 
 -- | Consume no input, succeed with given value
 valueParser :: a -> Parser a
 valueParser out = P (`Result` out)
 
+-- | Consume no input, then fail
 failed :: Parser a
 failed = P (\_ -> ErrorResult Failed)
 
@@ -118,7 +56,10 @@ list pa = list1 pa ||| valueParser []
 
 -- | Parse 1 or more values
 list1 :: Parser a -> Parser [a]
-list1 pa = pa >>= (\a -> list pa >>= (\as -> valueParser $ a:as))
+list1 pa = do
+  a <- pa
+  as <- list pa
+  return $ a:as
 
 -- | Parse 0 or more strings, concatenate result
 concatLi :: Parser String -> Parser String
@@ -128,45 +69,43 @@ concatLi pa = concatLi1 pa ||| valueParser []
 concatLi1 :: Parser String -> Parser String
 concatLi1 pa = list1 pa >>= (valueParser . concat)
 
+-- | Parse one element, then a list of elements, and cons the result together
+consParsers :: Parser a -> Parser [a] -> Parser [a]
+consParsers pa pas = do
+  a <- pa
+  as <- pas
+  return $ a:as
+
+
+-- | Run all parsers in the list in sequence
+sequenceParser :: [Parser a] -> Parser [a]
+sequenceParser = foldr f (valueParser [])
+  where
+    f pa pas = pa >>= \a ->
+               pas >>= \as ->
+               valueParser (a:as)
+
+-- | Parse a char that satisfy the given predicate
 satisfy :: (Char -> Bool) -> Parser Char
-satisfy p = charParser >>= (\a -> if p a then valueParser a else failed)
+satisfy p = charParser >>= \a ->
+            if p a
+              then valueParser a
+              else failed
 
 is :: Char -> Parser Char
 is c = satisfy (==c)
 
+-- | Parse a character which appears in the given string
 oneOf :: String -> Parser Char
 oneOf str = satisfy (`elem` str)
 
+-- | Parse a character that does not appear in the given string
 noneOf :: String -> Parser Char
 noneOf str = satisfy (`notElem` str)
 
+-- | Consume a character (left), then run a parser, then consume a character (r)
 betweenChars :: Char -> Char -> Parser a -> Parser a
 betweenChars l r pa = is l *> pa <* is r
-
-parseLit :: Parser Char
-parseLit = noneOf specials
-
--- | Parser for "?" pattern
-parseWildcard1 :: Parser Char
-parseWildcard1 = charParser
-
--- | Parser for "*" pattern
-parseWildcard :: Parser String
-parseWildcard = list charParser
-
--- Note that we don't treat ] as a special character unless we are trying to close a set match.
--- | Parse set pattern
-parseSet :: Parser String
-parseSet = betweenChars '[' ']' $ concatLi parsePtrnNoSet
-
-parsePtrnNoSet :: Parser String
-parsePtrnNoSet = undefined
-
-parsePtrn :: Parser String
-parsePtrn = parseSet ||| failed
-
-parseRange :: String -> Parser String
-parseRange ptrn = undefined -- ord chr
 
 instance Functor Parser where
   --fmap :: (a -> b) -> Parser a -> Parser b
