@@ -1,4 +1,5 @@
 {-# OPTIONS_GHC -Wno-unused-binds #-}
+{-# LANGUAGE DeriveFunctor #-}
 
 module Parser where
 
@@ -9,7 +10,7 @@ data ParseError = Failed
 
 data ParseResult a = ErrorResult ParseError
                    | Result Input a
-                   deriving Eq
+                   deriving (Eq, Functor)
 
 instance Show a => Show (ParseResult a) where
   show (ErrorResult e) = show e
@@ -27,6 +28,14 @@ newtype Parser a = P {
 valueParser :: a -> Parser a
 valueParser out = P (`Result` out)
 
+-- | Consume no input, succeed with a list with the given value
+valueParserS :: a -> Parser [a]
+valueParserS out = P (`Result` [out])
+
+-- |
+valueInpParser :: Parser Char -> Parser (Parser String)
+valueInpParser p = valueParser $ (:[]) <$> p
+
 -- | Consume no input, then fail
 failed :: Parser a
 failed = P (\_ -> ErrorResult Failed)
@@ -36,7 +45,6 @@ charParser :: Parser Char
 charParser = P (\inp -> case inp of
                          [] -> ErrorResult Failed
                          (c:cs) -> Result cs c)
-
 
 -- | Consume and discard input from first parser, continue with second parser
 (>>>) :: Parser a -> Parser b -> Parser b
@@ -76,7 +84,6 @@ consParsers pa pas = do
   as <- pas
   return $ a:as
 
-
 -- | Run all parsers in the list in sequence
 sequenceParser :: [Parser a] -> Parser [a]
 sequenceParser = foldr f (valueParser [])
@@ -85,6 +92,14 @@ sequenceParser = foldr f (valueParser [])
                pas >>= \as ->
                valueParser (a:as)
 
+-- | Run all parsers in the list in sequence
+anyParser :: [Parser a] -> Parser a
+anyParser = foldr (|||) failed
+
+-- | Run all parsers in the list in sequence and concatenate the result
+sequenceParserConcat :: [Parser [a]] -> Parser [a]
+sequenceParserConcat ps = concat <$> sequenceParser ps
+
 -- | Parse a char that satisfy the given predicate
 satisfy :: (Char -> Bool) -> Parser Char
 satisfy p = charParser >>= \a ->
@@ -92,6 +107,7 @@ satisfy p = charParser >>= \a ->
               then valueParser a
               else failed
 
+-- | Character equals
 is :: Char -> Parser Char
 is c = satisfy (==c)
 
@@ -99,11 +115,11 @@ is c = satisfy (==c)
 oneOf :: String -> Parser Char
 oneOf str = satisfy (`elem` str)
 
--- | Parse a character that does not appear in the given string
+-- | Parse a character which do not appear in the given string
 noneOf :: String -> Parser Char
 noneOf str = satisfy (`notElem` str)
 
--- | Consume a character (left), then run a parser, then consume a character (r)
+-- | Consume a character (left), then run a parser, then consume a character (right)
 betweenChars :: Char -> Char -> Parser a -> Parser a
 betweenChars l r pa = is l *> pa <* is r
 
@@ -112,6 +128,7 @@ instance Functor Parser where
   fmap f pa = pa >>= (valueParser . f)
 
 instance Applicative Parser where
+  -- pure :: a -> Parser a
   pure = valueParser
   --(<*>) :: Parser (a -> b) -> Parser a -> Parser b
   (<*>) pf pa = pf >>= (\f -> pa >>= (valueParser . f))
@@ -120,6 +137,7 @@ instance Monad Parser where
   -- (>>=) :: Parser a -> (a -> Parser b) -> Parser b
   (>>=) pa f = flBindP f pa
 
+-- | Parser bind with flipped arguments
 flBindP :: (a -> Parser b) -> Parser a -> Parser b
 flBindP f pa = P (\inp -> case parse pa inp of
                           ErrorResult e -> ErrorResult e

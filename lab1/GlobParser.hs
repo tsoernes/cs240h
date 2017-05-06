@@ -1,8 +1,6 @@
 {-# OPTIONS_GHC -Wno-unused-binds #-}
 
-module GlobParser (
-  globParser
-) where
+module GlobParser where
 
 import Data.Char (ord)
 
@@ -11,82 +9,88 @@ import Parser
 specials :: String
 specials = "?*\\["
 
+-- It does not make sense to treat '?' or '*' as special inside a set
+--   because that would defeat the purpose of the set. Sets cannot be
+--   recursive so '[' is not a special char either.
 setSpecials :: String
-setSpecials = "-]"
+setSpecials = "\\-]"
 
+-- Make sure that both parsers and inpParser consume their input
+--
 -- The parser that's used on the GlobPattern must produce
 -- a Parser String which is then used on the input to check
 -- that 1) the input is fully consumed by the parser
 --      2) the parser doesn't fail
 --      3) the output corresponds to the input
 --
--- The first parser is of type GlobParser
--- and the second of type InputParser.
---
 -- The GlobParser chains together 0 or more pattern parsers,
 -- where the latter parses a particular pattern, e.g. set or wildcard.
---
--- Helper methods for GlobParser are named: glb***Parser
--- Helper methods for StringParser are named: inp***Parser
 
-type StringParser = Parser String
-type GlobParser = Parser String
-type PatternParser = Parser (Parser Char)
+type PatternParser = Parser (Parser String)
 
-globParser :: GlobParser
-globParser = undefined
+globParser :: PatternParser
+globParser = parsePtrns
 
--- Parse one literal, including special characters (e.g. "\*")
-glbParseLits :: PatternParser
-glbParseLits = valueParser $ parseSpecial specials
-
--- Parse one literal inside a set, including special characters (e.g. "\]")
-glbParseLitsSet ::PatternParser
-glbParseLitsSet = valueParser $ parseSpecial setSpecials
-
-parseSpecial :: String -> Parser Char
-parseSpecial str = (is '\\' >>> charParser) ||| noneOf str
+-- | Parse a literal, including given special characters (e.g. "\*")
+parseLits :: String -> PatternParser
+parseLits specials' = do
+     c <- is '\\' >>> charParser ||| noneOf specials'
+     valueInpParser $ is c
 
 -- | Parser for "?" pattern
-glbParseWildcard1 :: PatternParser
-glbParseWildcard1 = valueParser charParser
+parseWildcard1 :: PatternParser
+parseWildcard1 = is '?' >>> valueInpParser charParser
 
 -- | Parser for "*" pattern
---    Attempts to parse anything after "*" first, and if
---    that fails, parses one character then recurses.
-glbParseWildcard :: Parser (Parser String)
-glbParseWildcard = do
+parseWildcard :: PatternParser
+parseWildcard = do
   _ <- is '*'
-  ptrnParser <- glbParsePtrn
+  -- Attempts to parse pattern after "*" first, and if
+  -- that fails, parses one character then recurse.
+  ptrnParser <- parsePtrns
   let p = ptrnParser ||| consParsers charParser p
   return p
 
--- Note that we don't treat ] as a special character unless we are trying to close a set match.
 -- | Parse set pattern
-glbParseSet :: Parser String
-glbParseSet = undefined --betweenChars '[' ']' $ concatLi parsePtrnNoSet
+--
+-- how to handle multiple patterns within a set? e.g. [ab-dk]
+-- should produce: parseLit a OR parseRange b-d OR parseLit k
+-- actually produces: parseLit a THEN parseRange b-d THEN parseLit k
+-- should [abc] not match on "abc"; just "a", "b" and "c"
+parseSet :: PatternParser
+parseSet = betweenChars '[' ']' $ anyParser <$> list1 parsePtrnInSet
 
--- Must handle ranges, escaped chars ... [ac-f\\] either a, c, d, f, \
-inpParseSet = undefined
--- data Pattern = Set Pattern | Char Pattern | d
--- Parse any pattern not including sets
-glbParsePtrnNoSet :: Parser (Parser String)
-glbParsePtrnNoSet = undefined
+-- | Parse any single pattern inside a set
+parsePtrnInSet :: PatternParser
+parsePtrnInSet = parseRange ||| parseLits setSpecials
 
-glbParsePtrn :: Parser (Parser String)
-glbParsePtrn = undefined
+-- | Parse at least one pattern inside a set
+parsePtrnsInSet1 :: PatternParser
+parsePtrnsInSet1 = sequenceParserConcat <$> list1 parsePtrnInSet
 
--- | Parse a character within a range "a-b"
-glbParseRange :: PatternParser
-glbParseRange = charParser >>= \l ->
-                is '-' >>= \_ ->
-                charParser >>= \r ->
-                  valueParser $ inpParseRange l r
+-- | Parse any single pattern
+parsePtrn :: PatternParser
+parsePtrn = parseSet
+           ||| parseRange
+           ||| parseWildcard
+           ||| parseWildcard1
+           ||| parseLits specials
 
-inpParseRange :: Char -> Char -> Parser Char
+-- | Parse 1 or more patterns
+parsePtrns :: PatternParser
+parsePtrns = sequenceParserConcat <$> list parsePtrn
+
+-- | Parse 1 character within a detected range, e.g. "a-k"
+parseRange :: PatternParser
+parseRange = do
+  l <- charParser
+  _ <- is '-'
+  r <- charParser
+  return $ inpParseRange l r
+
+inpParseRange :: Char -> Char -> Parser String
 inpParseRange l r = charParser >>= \c ->
                     if (ord c >= ord l) && (ord c <= ord r)
-                       then valueParser c
+                       then valueParserS c
                        else failed
-
 
