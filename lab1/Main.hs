@@ -98,8 +98,6 @@ pmp :: Parser (Parser String) -> GlobPattern -> String -> IO()
 pmp p ptrn inp = putStrLn res
   where
     globRes = parse p ptrn
-    --globRes = parse (concatLi1 <$> p) ptrn
-    --globRes = parse (sequenceParserConcat [p,p,p]) ptrn
     res = case globRes of
             ErrorResult e1 -> show e1
             Result rem' stringParser -> let stringRes = parse stringParser inp

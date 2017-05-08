@@ -12,8 +12,9 @@ specials = "?*\\["
 -- It does not make sense to treat '?' or '*' as special inside a set
 --   because that would defeat the purpose of the set. Sets cannot be
 --   recursive so '[' is not a special char either.
+--   '-' is not a special symbol by itself because it requires a char on either side.
 setSpecials :: String
-setSpecials = "\\-]"
+setSpecials = "\\]"
 
 -- Make sure that both parsers and inpParser consume their input
 --
@@ -34,7 +35,7 @@ globParser = parsePtrns
 -- | Parse a literal, including given special characters (e.g. "\*")
 parseLits :: String -> PatternParser
 parseLits specials' = do
-     c <- is '\\' >>> charParser ||| noneOf specials'
+     c <- (is '\\' >>> charParser) ||| noneOf specials'
      valueInpParser $ is c
 
 -- | Parser for "?" pattern
@@ -52,13 +53,8 @@ parseWildcard = do
   return p
 
 -- | Parse set pattern
---
--- how to handle multiple patterns within a set? e.g. [ab-dk]
--- should produce: parseLit a OR parseRange b-d OR parseLit k
--- actually produces: parseLit a THEN parseRange b-d THEN parseLit k
--- should [abc] not match on "abc"; just "a", "b" and "c"
 parseSet :: PatternParser
-parseSet = betweenChars '[' ']' $ anyParser <$> list1 parsePtrnInSet
+parseSet = betweenChars '[' ']' $ anyParser <$> list parsePtrnInSet
 
 -- | Parse any single pattern inside a set
 parsePtrnInSet :: PatternParser
@@ -83,9 +79,9 @@ parsePtrns = sequenceParserConcat <$> list parsePtrn
 -- | Parse 1 character within a detected range, e.g. "a-k"
 parseRange :: PatternParser
 parseRange = do
-  l <- charParser
+  l <- noneOf $ specials ++ setSpecials
   _ <- is '-'
-  r <- charParser
+  r <- noneOf $ specials ++ setSpecials
   return $ inpParseRange l r
 
 inpParseRange :: Char -> Char -> Parser String
