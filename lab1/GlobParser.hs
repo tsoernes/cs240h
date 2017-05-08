@@ -1,6 +1,6 @@
-{-# OPTIONS_GHC -Wno-unused-binds #-}
+-- {-# OPTIONS_GHC -Wno-unused-binds #-}
 
-module GlobParser where
+module GlobParser (globParser) where
 
 import Data.Char (ord)
 
@@ -46,10 +46,13 @@ parseWildcard1 = is '?' >>> valueInpParser charParser
 parseWildcard :: PatternParser
 parseWildcard = do
   _ <- is '*'
-  -- Attempts to parse pattern after "*" first, and if
-  -- that fails, parses one character then recurse.
-  ptrnParser <- parsePtrns
-  let p = ptrnParser ||| consParsers charParser p
+  -- Attempts to parse pattern after '*' first, and if that
+  -- fails, parses one character then recursively try again.
+  -- If '*' is last, then just consume any and all characters.
+  ptrnParsers <- list parsePtrn
+  let p = if null ptrnParsers
+      then list charParser
+      else sequenceParserConcat ptrnParsers ||| consParsers charParser p
   return p
 
 -- | Parse set pattern
@@ -60,10 +63,6 @@ parseSet = betweenChars '[' ']' $ anyParser <$> list parsePtrnInSet
 parsePtrnInSet :: PatternParser
 parsePtrnInSet = parseRange ||| parseLits setSpecials
 
--- | Parse at least one pattern inside a set
-parsePtrnsInSet1 :: PatternParser
-parsePtrnsInSet1 = sequenceParserConcat <$> list1 parsePtrnInSet
-
 -- | Parse any single pattern
 parsePtrn :: PatternParser
 parsePtrn = parseSet
@@ -72,7 +71,7 @@ parsePtrn = parseSet
            ||| parseWildcard1
            ||| parseLits specials
 
--- | Parse 1 or more patterns
+-- | Parse zero or more patterns
 parsePtrns :: PatternParser
 parsePtrns = sequenceParserConcat <$> list parsePtrn
 

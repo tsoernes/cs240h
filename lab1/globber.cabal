@@ -12,6 +12,8 @@ library
     Haskell2010
   exposed-modules:
     Main
+    Parser
+    GlobParser
   build-depends:
     base < 5
     , QuickCheck >= 2.0

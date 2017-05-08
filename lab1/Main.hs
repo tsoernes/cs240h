@@ -1,7 +1,8 @@
 module Main where
 
-import Parser
-import GlobParser
+import Parser (Parser(..), ParseResult(..))
+import GlobParser (globParser)
+
 -- $setup
 -- >>> :set -XOverloadedStrings
 -- >>> import Data.Char(isUpper)
@@ -70,6 +71,14 @@ main = undefined
 -- True
 -- >>> matchGlob  "*" "adc"
 -- True
+-- >>> matchGlob  "ac*" "acK_"
+-- True
+-- >>> matchGlob  "*ac" "\\d*wac"
+-- True
+-- >>> matchGlob  "a*b" "ab"
+-- True
+-- >>> matchGlob  "a*b" "axyz"
+-- False
 -- >>> matchGlob "[abc-]" "c"
 -- True
 -- >>> matchGlob "[abc-]" "c"
@@ -85,22 +94,13 @@ matchGlob ptrn inp = inpOK
                                           Result _ inp' -> inp' == inp
 
 
-pm :: GlobPattern -> String -> String
-pm ptrn inp = res
-  where
-    globRes = parse globParser ptrn
-    res = case globRes of
-            ErrorResult e1 -> show e1
-            Result rem' stringParser -> let stringRes = parse stringParser inp
-                                        in (show rem') ++ "\n" ++ (show stringRes)
-
-pmp :: Parser (Parser String) -> GlobPattern -> String -> IO()
-pmp p ptrn inp = putStrLn res
+printMatchGlob :: Parser (Parser String) -> GlobPattern -> String -> IO()
+printMatchGlob p ptrn inp = putStrLn res
   where
     globRes = parse p ptrn
     res = case globRes of
             ErrorResult e1 -> show e1
             Result rem' stringParser -> let stringRes = parse stringParser inp
-                                         in "Glob rem: " ++ (show rem') ++ "\n" ++ (show stringRes)
+                                         in "Glob rem: " ++ show rem' ++ "\n" ++ show stringRes
 
 type GlobPattern = String

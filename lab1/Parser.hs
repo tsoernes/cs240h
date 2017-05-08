@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -Wno-unused-binds #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE InstanceSigs #-}
 
@@ -134,6 +133,12 @@ betweenChars l r pa = do
   res <- pa
   _ <- is r
   return res
+
+eof :: Parser [a]
+eof = P f
+ where
+   f [] = Result [] []
+   f _ = ErrorResult Failed
 
 instance Functor Parser where
   fmap :: (a -> b) -> Parser a -> Parser b
