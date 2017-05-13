@@ -1,3 +1,11 @@
+{-# OPTIONS_GHC -Wno-unused-binds #-}
+{-# OPTIONS_GHC -Wno-unused-matches #-}
+{-# OPTIONS_GHC -Wno-unused-imports #-}
+
+-- For writing and reading DB to file with Aeson
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 module Trahs where
 
 import Control.Applicative
@@ -6,12 +14,19 @@ import System.Exit
 import System.Process
 import System.IO
 import Codec.Digest.SHA
-import qualified Data.ByteString.Lazy as L
+import qualified Data.ByteString.Lazy as BSL
+import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as M
 import Data.Bifunctor (bimap)
+import Control.Monad (when, unless)
+import Data.Maybe (fromMaybe)
+import System.Directory (getDirectoryContents, doesFileExist)
+import System.Random (randomR, getStdGen, getStdRandom)
+import GHC.Generics (Generic)
+import Data.Aeson (ToJSON, FromJSON, encode, decodeStrict)
 
 dbPath :: String
-dbPath = ".trahsdb"
+dbPath = ".trahs.db"
 
 -- 1: Check args
 -- 2: Connect to server
@@ -37,14 +52,16 @@ server :: Handle -> Handle -> FilePath -> IO ()
 server r w dir = do
   hPutStrLn w "I am the server"
   line <- hGetLine r
-  -- If the command asked us to switch roles, then at this point we
-  -- would run client False r w dir here.  Otherwise want to process
-  -- command and keep looping.
-  hPutStrLn w $ "You said " ++ line
+  case line of
+    -- Switch roles
+    "TURN" -> client False r w dir
+    -- Process command and keep looping
+    _ -> exitFailure
 
 -- | @client turn r w dir@ runs the client to update @dir@ based on
--- the remote contents.  Commands for the remote server are written to
--- @w@, while replies are read from @r@.  If @turn@, then when done
+-- the remote contents, i.e. receive updates from remote server.
+-- Commands for the remote server are written to @w@, while replies
+-- are read from @r@.  If @turn@, then when done
 -- the client should attempt to swap roles and run the protocol in the
 -- other direction (uploading any changes to the other side).
 -- Otherwise, if @turn@ is false, @client@ should simply return when
@@ -56,16 +73,25 @@ client turn r w dir = do
   hPutStrLn w "Hello, server"
   line' <- hGetLine r
   hPutStrLn stderr $ "The server said " ++ show line'
-  -- At the end, if turn == True, then we issue some command to swap
-  -- roles and run server r w dir.
 
+  -- At the end, if `turn == True`, then we issue the TURN command to
+  -- the server in order to swap roles and run `server r w dir` in
+  -- order to upload changes to remote server.
+  when turn $ do hPutStrLn w "TURN"
+                 server r w dir
+
+-- | Generate command for connecting to a remote host
+-- with address @host@ through SSH and launching trash
+-- on remote directory @dir@
 hostCmd :: String -> FilePath -> IO String
 hostCmd host dir = do
-  tmpl <- maybe traSSH id <$> lookupEnv "TRASSH"
+  tmpl <- fromMaybe traSSH <$> lookupEnv "TRASSH"
   case break (== '@') tmpl of
     (b, '@':e) -> return $ b ++ host ++ e ++ ' ':dir
     _          -> return $ tmpl ++ ' ':dir
 
+-- | Spawn trahs process on remote host with the given
+-- address @host@ and directory @dir@
 spawnRemote :: String -> FilePath -> IO (Handle, Handle)
 spawnRemote host dir = do
   cmd <- hostCmd host dir
@@ -77,21 +103,32 @@ spawnRemote host dir = do
   hSetBuffering w LineBuffering
   return (r, w)
 
+-- | Connect to @host@ address and sync remote
+-- directory @rdir@ with local directory @ldir@.
+-- Once finished, @ldir@ on the client and @rdir@
+-- on server @host@ should have the same contents.
 connect :: String -> FilePath -> FilePath -> IO ()
 connect host rdir ldir = do
   (r, w) <- spawnRemote host rdir
   client True r w ldir
 
 hashFile :: FilePath -> IO String
-hashFile path = showBSasHex <$> (hash SHA256 <$> L.readFile path)
+hashFile path = showBSasHex <$> (hash SHA256 <$> BSL.readFile path)
 
 
 -- The first phase consists of finding modified files in the local directory.
 -- trahs must read the directory and compare each file to the hash last recorded.
 -- If the file has changed, trahs sets the file's write stamp to the local replica
 -- ID and version number (as the changes are not reflected on any other replica).
-updateDB :: IO ()
-updateDB = undefined
+updateDB :: FilePath -> IO ()
+updateDB path = do
+  files <- getDirectoryContents path >>= mapM readFile
+  -- paths <- getDirectoryContents path
+  -- files <- mapM readFile paths
+  let hashes = map hashFile files
+      -- Compare new hashed with
+  return ()
+
 
 
 -- In the second phase, the server simply sends the client its version vector and
@@ -112,6 +149,15 @@ mergeState lvv rvv lwss rwss = undefined
 -- If the file exists on both the client and server and LWS = RWS, there is nothing to do.
 -- If the files differ, but "version RWS ≤ LVV!replica(RWS)", then the client already learned about the server's version in some previous synchronization and subsequently overwrote it. Hence, the client ignores the server's version and keeps its own with no change.
 
+
+-- A unique replica ID. The first time trahs is run on a particular directory,
+-- it should randomly generate a replica ID for itself.
+-- The replica ID should then never change.
+type ReplicaID = Int
+
+-- A local version number starts at 1 and increments every time trahs is run (and server is connectable).
+type VersionNum = Int
+
 -- In the fourth phase, the client sets its version vector to contain the
 -- element-wise maximum of its previous contents and the values in the
 -- remote server's version vector. This ensures that ∀R.LVV!R ≥ RVV!R,
@@ -122,33 +168,46 @@ updateVersionVec :: VersionVector -- ^ Local (client) version vector
 updateVersionVec lvv rvv = undefined
 
 -- A version vector is a map from replica ID to version number.
--- A local version number starts at 1 and increments every time trahs is run (and server is connectable).
--- The first time trahs is run on a particular directory, it should randomly
--- generate a replica ID for itself. The replica ID should then never change.
 -- A replica's own replica ID always maps to its latest local version number.
 -- Conceptually, any replica IDs not in the version vector are mapped to version number 0.
+-- M.findWithDefault 0 key
 --
 -- After synchronizing from a remote replica, the local replica should set
 -- its version vector to the element-wise maximum of old local version vector
 -- and the remote version vector.
-type VersionVector = M.Map Int Int
+type VersionVector = M.Map ReplicaID VersionNum
 
--- For each file, a write stamp consisting of replica ID and version number of the file's last update.
--- The replica ID corresponds to the replica that created this version of the file;
--- the version number is that replica's local version number at the time trahs saw that version of the file.
-type FileInfo = M.Map String WriteStamp -- String: File name
+type FileInfo = M.Map FilePath WriteStamp
+
 data WriteStamp = WStamp { fileHash :: String
-                         , replicaID :: Int
-                         , version :: Int } deriving (Show, Read)
+                         , replicaID :: ReplicaID    -- ^ The replicate that created this version of the file
+                         , versionNum :: VersionNum  -- ^ The local version number of the replica that created this version of the file
+                         } deriving (Show, Generic)
 
--- Assume that first line contains VersionVector,
--- second line contains FileInfo
-loadDB :: String -> IO (VersionVector, FileInfo)
-loadDB fname = bimap read read . toTup . lines <$> readFile fname
-  where
-    toTup :: [String] -> (String, String)
-    toTup [a, b] = (a, b)
-    toTuop _ = ("failed","failed")
+data DB = DB { dbReplicaID :: ReplicaID       -- ^ This replicas ID
+             , dbVersionVec :: VersionVector
+             , dbFileInfo :: FileInfo
+             } deriving (Show, Generic)
 
-writeDB :: String -> VersionVector -> FileInfo -> IO ()
-writeDB fname vv fi = writeFile fname $ show vv ++ "\n" ++ show fi
+instance ToJSON WriteStamp
+instance FromJSON WriteStamp
+instance ToJSON DB
+instance FromJSON DB
+
+loadDB :: IO DB
+loadDB = do
+  fileExists <- doesFileExist dbPath
+  unless fileExists $ writeFile dbPath ""
+  file <- BS.readFile dbPath
+  gen <- getStdGen
+  newReplicaID <- getStdRandom $ randomR (0, maxBound::Int)
+  let json = decodeStrict file
+      -- If the database file is empty or incorrectly formatted,
+      -- then create a new DB with a new, randomly generated replicaID
+      -- and a VersionVector containing this replica only with a version number of 1
+      def = DB newReplicaID (M.singleton newReplicaID 1) M.empty
+      db = fromMaybe def json
+  return db
+
+writeDB :: DB -> IO ()
+writeDB db = BSL.writeFile dbPath $ encode db
