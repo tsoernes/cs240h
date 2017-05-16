@@ -1,10 +1,8 @@
--- | Runner for Chat server. We put Main separately so that we can keep chat as
--- a library for testing.
-module Main (main) where
+module Server (main) where
 
 import System.Environment (lookupEnv)
 import Data.Maybe (fromMaybe)
-import Chat
+import Chat (chat)
 
 defaultPort :: Int
 defaultPort = 8181
@@ -13,15 +11,12 @@ defaultPort = 8181
 main :: IO ()
 main = do
   port <- getPort
+  putStrLn $ "Using port: " ++ show port
   chat port
 
 getPort :: IO Int
 getPort = do
   port <- lookupEnv "CHAT_SERVER_PORT"
-  let intPort = fromMaybe defaultPort (port >>= readMaybe)
+  let intPort = fromMaybe defaultPort (port >>= read)
   return intPort
 
-readMaybe :: Read a => String -> Maybe a
-readMaybe str = case reads str of
-                  [(val, "")] -> Just val
-                  _ -> Nothing
