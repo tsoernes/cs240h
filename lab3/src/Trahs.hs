@@ -61,7 +61,7 @@ data WriteStamp = WStamp
   , wsReplicaID  :: ReplicaID    -- ^ The replica that created this version of the file
   -- | The local version number of the replica that created this version of the file
   , wsVersionNum :: VersionNum
-  } deriving (Show, Generic)
+  } deriving (Show, Generic, Eq)
 
 type WriteStamps = M.Map FilePath WriteStamp
 
@@ -211,51 +211,50 @@ receiveDB path r = do
 mergeState :: DB -- ^ Local (client) DB
            -> DB -- ^ Remote (server) DB
            -> DB -- ^ Merged local DB
-mergeState ldb rdb = DB { dbReplicaID = dbReplicaID ldb, dbVersionVec = lvv', dbWriteStamps = lwss'}
--- Notation:
---    RWS -> M.lookup xxx rwss
---    version(RWS) -> wsVersionNum rws
---    LVV!replica(RWS) -> M.lookup (wsReplicaID rws) lvv
-
--- If the file exists on both the client and server and LWS = RWS, there is nothing to do.
-
--- If the files differ, but version(RWS) ≤ LVV!replica(RWS), then the
--- client already learned about the server's version in some previous
--- synchronization and subsequently overwrote it. Hence, the client
--- ignores the server's version and keeps its own with no change.
-
--- Conversely, if version(LWS) ≤ RVV!replica(LWS), then the server knew
--- about and overwrote the client's version. Hence the client downloads
--- the new version from the server, replaces the local file with the
--- contents of the remote one, and also replaces the local writestamp
--- with the remote one in the synchronization state (LWS ← RWS).
-
--- If the file exists on both replicas and none of the above cases holds, flag a conflict.
-
--- If the file exists on neither the client nor server (deleted or never
--- created on both), there is obviously nothing to do.
-
--- If the file exists only on the server, then download it only if the
--- client has not previously downloaded that version or a version that
--- supersedes it (i.e., download only if version(RWS) > LVV!replica(RWS)).
--- Otherwise, ignore the file as it was previously downloaded and deleted.
-
--- If the file exists only on the client, then delete it only if the server
--- previously had the client's version of the file or a version derived
--- from it. In other words, delete only if version(LWS) ≤ RVV!replica(LWS).
+mergeState ldb rdb = undefined -- DB { dbReplicaID = dbReplicaID ldb, dbVersionVec = lvv', dbWriteStamps = lwss'}
   where
     lvv = dbVersionVec ldb -- Local version vector
     rvv = dbVersionVec rdb -- Remote version vector
     lwss = dbWriteStamps ldb  -- Local write stamps
     rwss = dbWriteStamps rdb  -- Remote write stamps
-    -- M.unionWithKey comb
-    lvv' = undefined
-    lwss' = undefined
-    -- TODO: What to do here? Update lvv or lwss? Should files actually be
-    -- downloaded or deleted here, or could it be done afterwards based on
-    -- the updated lvv/lwss?
 
--- M.findWithDefault 0 key
+    inBoth = M.intersectionWith inBothF lwss rwss
+    inBothF lws rws = if lws == rws
+      -- If the file exists on both the client and server and LWS = RWS, there is nothing to do.
+      then lws -- Files are identical
+      -- If the files differ, but version(RWS) ≤ LVV!replica(RWS),
+      else if wsVersionNum rws <= verLookup (wsReplicaID rws) lvv
+        -- then the client already learned about the server's version in some previous
+        -- synchronization (and if less than, subsequently overwrote it). Hence, the client
+        -- ignores the server's version and keeps its own with no change.
+        then lws -- Client has newest version
+        -- Conversely, if version(LWS) ≤ RVV!replica(LWS),
+        else if wsVersionNum lws <= verLookup (wsReplicaID lws) rvv
+          -- then the server knew about and overwrote the client's version.
+          -- Hence the client downloads the new version from the server,
+          -- replaces the local file with the contents of the remote one
+          then rws -- Server has newest version; should download
+          -- If the file exists on both replicas and none of
+          -- the above cases holds, flag a conflict.
+          else rws -- TODO: Conflict
+
+    -- If the file exists only on the server, then download it only if the
+    -- client has not previously downloaded that version or a version that
+    -- supersedes it (i.e., download only if version(RWS) > LVV!replica(RWS)).
+    -- Otherwise, ignore the file as it was previously downloaded and deleted.
+    servOnly = M.filter servOnlyF $ M.difference rwss lwss
+    servOnlyF rws = wsVersionNum rws > verLookup (wsReplicaID rws) lvv
+
+    -- If the file exists only on the client, then delete it only if the server
+    -- previously had the client's version of the file or a version derived
+    -- from it. In other words, delete only if version(LWS) ≤ RVV!replica(LWS).
+    cliOnly = M.filter cliOnlyF $ M.difference lwss rwss
+    cliOnlyF lws = wsVersionNum lws > verLookup (wsReplicaID lws) rvv
+
+
+-- | Look up a ReplicaID in a VersionVector to get a VersionNum, default to 0
+verLookup :: ReplicaID -> VersionVector -> VersionNum
+verLookup = M.findWithDefault 0
 
 
 -- | Fourth phase: The client sets its version vector to contain the
@@ -273,7 +272,7 @@ loadDB :: FilePath -> IO DB
 loadDB path = do
   let dbPath = path ++ dbFileName
   fileExists <- doesFileExist dbPath
-  unless fileExists $ writeFile dbPath ""
+  unless fileExists $ writeFile dbPath "" -- Touch empty DB file
   file <- BS.readFile dbPath
   gen <- getStdGen
   newReplicaID <- getStdRandom $ randomR (0, maxBound::Int)
