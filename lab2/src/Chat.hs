@@ -2,13 +2,13 @@
 -- Pretty much a carbon copy of: https://wiki.haskell.org/Implement_a_chat_server
 module Chat (chat) where
 
-import           Control.Concurrent
-import           Control.Exception
+import           Control.Concurrent (Chan, dupChan, forkIO, killThread, newChan,
+                                     readChan, writeChan)
+import           Control.Exception  (SomeException (..), handle)
+import           Control.Monad      (unless)
+import           Control.Monad.Fix  (fix)
 import           Network.Socket     hiding (recv, recvFrom, send, sendTo)
 import           System.IO
--- import Control.Concurrent.Chan
-import           Control.Monad.Fix  (fix)
-import           Control.Monad (unless)
 
 chat :: Int -> IO ()
 chat port = do
@@ -19,6 +19,11 @@ chat port = do
   listen sock 2 -- Maximum number of queued (non-accepted) connections
   -- Communication channel between connection threads
   chan <- newChan
+  -- Consume everything that's broadcasted to the original channel
+  -- to avoid memory leaks
+  _ <- forkIO $ fix $ \loop -> do
+    _ <- readChan chan
+    loop
   mainLoop sock chan 1
 
 
