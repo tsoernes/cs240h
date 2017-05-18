@@ -46,7 +46,7 @@ data WriteStamp = WStamp
   , wsVersionNum :: VersionNum
   } deriving (Show, Generic, Eq)
 
-data SyncAction = Download | Keep | Delete
+data SyncAction = Download | Keep | Delete | Conflict
 type WriteStamps = M.Map FilePath WriteStamp
 type SyncActions = M.Map FilePath (SyncAction, WriteStamp)
 
@@ -74,24 +74,29 @@ hashFile path = showBSasHex <$> (hash SHA256 <$> BSL.readFile path)
  -- If it fails, creates a default DB.
 loadDB :: FilePath -> IO DB
 loadDB dir = do
-  let dbPath = dir ++ dbFileName
+  let dbPath = dir +/+ dbFileName
   fileExists <- doesFileExist dbPath
   unless fileExists $ writeFile dbPath "" -- Touch empty DB file
   file <- BS.readFile dbPath
-  gen <- getStdGen
-  newReplicaID <- getStdRandom $ randomR (0, maxBound::Int)
+  defDB <- emptyDB
   let json = decodeStrict file
       -- If the database file is empty or incorrectly formatted,
       -- then create a new DB with a new, randomly generated replicaID
       -- and a VersionVector containing this replica only with a version number of 1
-      def = DB newReplicaID (M.singleton newReplicaID 1) M.empty
-      db = fromMaybe def json
+      db = fromMaybe defDB json
   return db
+
+emptyDB :: IO DB
+emptyDB = do
+  gen <- getStdGen
+  newReplicaID <- getStdRandom $ randomR (0, maxBound::Int)
+  let def = DB newReplicaID (M.singleton newReplicaID 1) M.empty
+  return def
 
 
 -- | Write DB to given directory with default name
 writeDB :: FilePath -> DB -> IO ()
-writeDB dir db = BSL.writeFile (dir ++ dbFileName) $ encode db
+writeDB dir db = BSL.writeFile (dir +/+ dbFileName) $ encode db
 
 
 -- | Generate command for connecting to a remote host
@@ -123,3 +128,7 @@ spawnRemote host dir = do
 -- replaced by the hostname, and the directory will be appended.
 traSSH :: String
 traSSH = "ssh -CTaxq @ ./trahs --server"
+
+
+(+/+) :: FilePath -> FilePath -> FilePath
+(+/+) dir name = dir ++ "/" ++ name

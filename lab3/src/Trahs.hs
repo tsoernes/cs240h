@@ -5,6 +5,8 @@ module Trahs (
 ) where
 
 import           Control.Monad            (when)
+import           Control.Monad.Fix            (fix)
+import Control.Exception (SomeException (..), handle)
 import           Data.Aeson               (decodeStrict,
                                            encode)
 import qualified Data.ByteString          as BS
@@ -34,6 +36,9 @@ import           Utils
 
 trahs :: IO ()
 trahs = do
+  -- Make stderr block on line write so that multiple threads can write
+  -- at the same time without their output getting mangled together.
+  hSetBuffering stderr LineBuffering
   args <- getArgs
   case args of
     ["--server", l] -> do hSetBuffering stdout LineBuffering
@@ -47,14 +52,16 @@ trahs = do
 -- reading input from @r@ and writing it to @w@.
 server :: Handle -> Handle -> FilePath -> IO ()
 server r w dir = do
+  hPutStrLn stderr $ "Running as server on dir: " ++ dir
   sendDB w dir
-  line <- hGetLine r
-  case line of
-    -- Switch roles
-    "Turning" -> client False r w dir
-    -- Process command and keep looping
-    "Requesting file:" -> sendFile r w dir >> server r w dir
-    s -> hPutStrLn stderr ("Unknown command: " ++ s) >> exitFailure
+  handle (\(SomeException _) -> return ()) $ fix $ \loop -> do
+    line <- hGetLine r
+    case line of
+      -- Switch roles
+      "Turning" -> client False r w dir
+      -- Process command and keep looping
+      "Requesting file:" -> sendFile r w dir >> loop
+      s -> hPutStrLn stderr ("Unknown command: " ++ s)
 
 
 -- | @client turn r w dir@ runs the client to update @dir@ based on
@@ -67,16 +74,24 @@ server r w dir = do
 -- done.
 client :: Bool -> Handle -> Handle -> FilePath -> IO ()
 client turn r w dir = do
-  rdb <- receiveDB r
+  hPutStrLn stderr $ "Running as client on dir: " ++ dir
+  hPutStrLn stderr "Scanning dir ..."
   ldb <- scanDir dir
+  rdb <- receiveDB r
+  hPutStrLn stderr "Merging state ..."
   wss <- mergeState ldb rdb r w dir
   let vvec = updateVersionVec (dbVersionVec ldb) (dbVersionVec rdb)
-  writeDB dir $ DB (dbReplicaID ldb) vvec wss
+  hPutStrLn stderr $ "Merged state: " ++ show wss
+  hPutStrLn stderr $ "Updated version vec: " ++ show vvec
+  let ldb' = DB (dbReplicaID ldb) vvec wss
+  hPutStrLn stderr $ "Updated version vec: " ++ show vvec
+  writeDB dir ldb'
 
   -- At the end, if `turn == True`, then we issue the TURN command to
   -- the server in order to swap roles and run `server r w dir` in
   -- order to upload changes to remote server.
   when turn $ do hPutStrLn w "Turning"
+                 hPutStrLn stderr "Turning"
                  server r w dir
 
 
@@ -84,11 +99,15 @@ client turn r w dir = do
 scanDir :: FilePath -> IO DB
 scanDir dir = do
   -- Read the directory and compute hashes for the files
-  fileNames' <- listDirectory dir
+  fileNames' <-  listDirectory dir
+  let fileNames = filter (/= dbFileName) fileNames'
+      filePaths' = fmap (\n -> dir +/+ n) fileNames
+  hPutStrLn stderr $ "Detected files in directory " ++ dir ++ " :"
+  _ <- sequence $ fmap (hPutStrLn stderr) filePaths'
   -- Only include regular files in DB. Exclude symbolic links, sub-directories etc.
-  statuses <- sequence $ fmap getFileStatus fileNames'
-  let fileNames = map fst $ filter (isRegularFile . snd) $ zip fileNames' statuses
-  hashes <- mapM hashFile fileNames
+  statuses <- sequence $ fmap getFileStatus filePaths'
+  let filePaths = map fst $ filter (isRegularFile . snd) $ zip filePaths' statuses
+  hashes <- mapM hashFile filePaths
   db <- loadDB dir
   let wss = dbWriteStamps db
       -- Update WriteStamps entries if the computed hashes does not match or are missing
@@ -96,6 +115,7 @@ scanDir dir = do
       versionNum = fromMaybe 1 $ M.lookup replicaID $ dbVersionVec db
       upd = updateWStamp replicaID versionNum
       wss' = foldr upd wss $ zip fileNames hashes
+  hPutStrLn stderr $ "WSS in " ++ dir ++ " after scanDir: " ++ show wss'
   return $ db { dbWriteStamps = wss' }
 
 
@@ -119,21 +139,27 @@ sendDB w dir = do
   db <- loadDB dir
   BSL.hPut w (encode db)
   hPutStrLn w ""
+  -- hPutStrLn w (show $ encode db)
+  -- hPutStrLn stderr ("Sent DB: " ++ show (encode db))
 
 
 -- | Read a database from handle
 receiveDB :: Handle -> IO DB
 receiveDB r = do
+  hPutStrLn stderr "Waiting to receive DB"
   str <- BS.hGetLine r
   let db = fromJust $ decodeStrict str
+  hPutStrLn stderr $ "Received DB: " ++ show db
   return db
 
 
 -- | Parse file name from a download request and send the file
 sendFile :: Handle -> Handle -> FilePath -> IO ()
 sendFile r w dir = do
+  hPutStrLn stderr "Waiting for file name from download request"
   fname <- hGetLine r
-  file <- readFile $ dir ++ fname
+  hPutStrLn stderr $ "Sending file: " ++ dir +/+ fname
+  file <- readFile $ dir +/+ fname
   hPutStrLn w file
 
 
@@ -142,14 +168,17 @@ sendFile r w dir = do
 receiveFile :: Handle -> Handle -> FilePath -> FilePath -> IO ()
 receiveFile r w dir fname = do
   -- Request file from server
+  hPutStrLn stderr $ "Requesting file: " ++ fname
   hPutStrLn w "Requesting file:"
   hPutStrLn w fname
   file <- hGetLine r
-  writeFile (dir ++ fname) file
+  writeFile (dir +/+ fname) file
 
 
 deleteFile :: FilePath -> FilePath -> IO ()
-deleteFile dir fname = removeFile $ dir ++ fname
+deleteFile dir fname = do
+  hPutStrLn stderr $ "Deleting file: " ++ dir +/+ fname
+  removeFile $ dir +/+ fname
 
 
 -- | Merge write stamps of remote server into local database,
@@ -157,6 +186,9 @@ deleteFile dir fname = removeFile $ dir ++ fname
 -- in order to sync local state with remote state.
 mergeState :: DB -> DB -> Handle -> Handle -> FilePath -> IO WriteStamps
 mergeState ldb rdb r w dir = do
+  -- hPutStrLn stderr $ "Mergin-- g ldb with rdb:"
+  -- hPutStrLn stderr $ show ldb
+  -- hPutStrLn stderr $ show rdb
   let syncActions = mergeWStamps ldb rdb
       syncIOActions = M.foldrWithKey' f [] syncActions
       f fname (sa, _) as = a:as
@@ -164,7 +196,10 @@ mergeState ldb rdb r w dir = do
           a = case sa of
             Download -> receiveFile r w dir fname
             Delete   -> deleteFile dir fname
+            Conflict -> return () -- TODO
             Keep     -> return ()
+  hPutStrLn stderr $ "Num. of sync actions" ++ show (length syncActions)
+  hPutStrLn stderr $ "Num. of sync IO actions: " ++ show (length syncIOActions)
   _ <- sequence syncIOActions
   return $ M.map snd syncActions
 
@@ -199,7 +234,7 @@ mergeWStamps ldb rdb = M.unions [inBoth, servOnly, cliOnly]
       | wsVersionNum lws <= verLookup (wsReplicaID lws) rvv = (Download, rws)
       -- If the file exists on both replicas and none of
       -- the above cases holds, flag a conflict.
-      | otherwise = (Download, rws) -- TODO: Conflict
+      | otherwise = (Conflict, rws)
 
     -- If the file exists only on the server, then download it only if the
     -- client has not previously downloaded that version or a version that
@@ -211,8 +246,12 @@ mergeWStamps ldb rdb = M.unions [inBoth, servOnly, cliOnly]
     -- If the file exists only on the client, then delete it only if the server
     -- previously had the client's version of the file or a version derived
     -- from it. In other words, delete only if version(LWS) ≤ RVV!replica(LWS).
-    cliOnly = M.map (\ws -> (Delete, ws)) $ M.filter cliOnlyP $ M.difference lwss rwss
-    cliOnlyP lws = wsVersionNum lws <= verLookup (wsReplicaID lws) rvv
+    -- cliOnly = M.map (\ws -> (Delete, ws)) $ M.filter cliOnlyP $ M.difference lwss rwss
+    -- cliOnlyP lws = wsVersionNum lws <= verLookup (wsReplicaID lws) rvv
+    cliOnly = M.map cliOnlyP $ M.difference lwss rwss
+    cliOnlyP lws = if wsVersionNum lws <= verLookup (wsReplicaID lws) rvv
+      then (Delete, lws)
+      else (Keep, lws)
 
 
 -- | Look up a ReplicaID in a VersionVector to get a VersionNum, default to 0
