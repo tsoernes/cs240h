@@ -65,6 +65,16 @@ instance ToJSON DB
 instance FromJSON DB
 
 
+-- | Look up a ReplicaID in a VersionVector to get a VersionNum, default to 0
+verLookup :: ReplicaID -> VersionVector -> VersionNum
+verLookup = M.findWithDefault 0
+
+
+-- | Get version of given database
+getVersionNum :: DB -> VersionNum
+getVersionNum db = verLookup (dbReplicaID db ) (dbVersionVec db)
+
+
 -- | Calculate a hash to uniquely identify a file
 hashFile :: FilePath -> IO String
 hashFile path = showBSasHex <$> (hash SHA256 <$> BSL.readFile path)
@@ -115,7 +125,7 @@ hostCmd host dir = do
 spawnRemote :: String -> FilePath -> IO (Handle, Handle)
 spawnRemote host dir = do
   cmd <- hostCmd host dir
-  hPutStrLn stderr $ "running " ++ show cmd
+  -- hPutStrLn stderr $ "running " ++ show cmd
   (Just w, Just r, _, _) <- createProcess (shell cmd) {
         std_in = CreatePipe
       , std_out = CreatePipe
@@ -132,3 +142,12 @@ traSSH = "ssh -CTaxq @ ./trahs --server"
 
 (+/+) :: FilePath -> FilePath -> FilePath
 (+/+) dir name = dir ++ "/" ++ name
+
+clog :: String -> IO ()
+clog s = hPutStrLn stderr s
+
+clogServ :: String -> IO ()
+clogServ s = clog $ "Server: " ++ s
+
+clogCli :: String -> IO ()
+clogCli s = clog $ "Client: " ++ s
