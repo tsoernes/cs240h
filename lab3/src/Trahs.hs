@@ -14,7 +14,7 @@ import qualified Data.ByteString.Lazy     as BSL
 import qualified Data.Map.Strict          as M
 import           Data.Maybe               (fromJust, fromMaybe)
 import           System.Directory         (listDirectory,
-                                           removeFile)
+                                           removeFile, renameFile)
 import           System.Environment       (getArgs)
 import           System.Exit              (exitFailure)
 import           System.IO
@@ -52,7 +52,7 @@ trahs = do
 -- reading input from @r@ and writing it to @w@.
 server :: Handle -> Handle -> FilePath -> IO ()
 server r w dir = do
-  hPutStrLn stderr $ "Running as server on dir: " ++ dir
+  clogServ $ "Running on directory: " ++ dir
   sendDB w dir
   handle (\(SomeException _) -> return ()) $ fix $ \loop -> do
     line <- hGetLine r
@@ -61,7 +61,7 @@ server r w dir = do
       "Turning" -> client False r w dir
       -- Process command and keep looping
       "Requesting file:" -> sendFile r w dir >> loop
-      s -> hPutStrLn stderr ("Unknown command: " ++ s)
+      s -> clogServ $ "Unknown command: " ++ s
 
 
 -- | @client turn r w dir@ runs the client to update @dir@ based on
@@ -74,17 +74,15 @@ server r w dir = do
 -- done.
 client :: Bool -> Handle -> Handle -> FilePath -> IO ()
 client turn r w dir = do
-  hPutStrLn stderr $ "Running as client on dir: " ++ dir
-  hPutStrLn stderr "Scanning dir ..."
+  clogServ $ "Running on directory: " ++ dir
   ldb <- scanDir dir
   rdb <- receiveDB r
-  hPutStrLn stderr "Merging state ..."
   wss <- mergeState ldb rdb r w dir
   let vvec = updateVersionVec (dbVersionVec ldb) (dbVersionVec rdb)
-  hPutStrLn stderr $ "Merged state: " ++ show wss
-  hPutStrLn stderr $ "Updated version vec: " ++ show vvec
+  clogCli $ "Merged state: " ++ show wss
+  clogCli $ "Updated version vec: " ++ show vvec
   let ldb' = DB (dbReplicaID ldb) vvec wss
-  hPutStrLn stderr $ "Updated version vec: " ++ show vvec
+  clogCli $ "Updated version vec: " ++ show vvec
   writeDB dir ldb'
 
   -- At the end, if `turn == True`, then we issue the TURN command to
@@ -146,38 +144,51 @@ sendDB w dir = do
 -- | Read a database from handle
 receiveDB :: Handle -> IO DB
 receiveDB r = do
-  hPutStrLn stderr "Waiting to receive DB"
   str <- BS.hGetLine r
   let db = fromJust $ decodeStrict str
-  hPutStrLn stderr $ "Received DB: " ++ show db
+  clogCli $ "Received DB: " ++ show db
   return db
 
 
 -- | Parse file name from a download request and send the file
 sendFile :: Handle -> Handle -> FilePath -> IO ()
 sendFile r w dir = do
-  hPutStrLn stderr "Waiting for file name from download request"
   fname <- hGetLine r
-  hPutStrLn stderr $ "Sending file: " ++ dir +/+ fname
+  clogServ $ "Sending file: " ++ dir +/+ fname
   file <- readFile $ dir +/+ fname
   hPutStrLn w file
 
 
--- | Send a request for file @fname@, read it from handle and
--- save to @dir@
+-- | Send a request from client to server for file @fname@,
+-- read it from handle and save to @dir@
 receiveFile :: Handle -> Handle -> FilePath -> FilePath -> IO ()
 receiveFile r w dir fname = do
   -- Request file from server
-  hPutStrLn stderr $ "Requesting file: " ++ fname
   hPutStrLn w "Requesting file:"
   hPutStrLn w fname
   file <- hGetLine r
   writeFile (dir +/+ fname) file
 
 
+-- | Handle conflicting files by:
+-- Delete original file. Create two new versions, named:
+-- <fname>#<replicaID>.<versionNum>
+-- Representing the versions from the two replicas client and server,
+-- with their respective ReplicaID and version number from when
+-- the conflict was handled.
+handleConflict :: DB -> DB -> Handle -> Handle -> FilePath -> FilePath -> IO ()
+handleConflict ldb rdb r w dir fname = do
+  let newPath db = let fn = fname ++ "#" ++ show (dbReplicaID db) ++ "." ++ show (getVersionNum db)
+                   in dir +/+ fn
+  -- Rename client's (original) file
+  renameFile (dir +/+ fname) $ newPath ldb
+  -- Download file from server and rename it
+  receiveFile r w dir fname
+  renameFile (dir +/+ fname) $ newPath rdb
+
 deleteFile :: FilePath -> FilePath -> IO ()
 deleteFile dir fname = do
-  hPutStrLn stderr $ "Deleting file: " ++ dir +/+ fname
+  clogCli $ "Deleting file: " ++ dir +/+ fname
   removeFile $ dir +/+ fname
 
 
@@ -196,10 +207,10 @@ mergeState ldb rdb r w dir = do
           a = case sa of
             Download -> receiveFile r w dir fname
             Delete   -> deleteFile dir fname
-            Conflict -> return () -- TODO
+            Conflict -> handleConflict ldb rdb r w dir fname
             Keep     -> return ()
-  hPutStrLn stderr $ "Num. of sync actions" ++ show (length syncActions)
-  hPutStrLn stderr $ "Num. of sync IO actions: " ++ show (length syncIOActions)
+  -- hPutStrLn stderr $ "Num. of sync actions" ++ show (length syncActions)
+  -- hPutStrLn stderr $ "Num. of sync IO actions: " ++ show (length syncIOActions)
   _ <- sequence syncIOActions
   return $ M.map snd syncActions
 
@@ -252,11 +263,6 @@ mergeWStamps ldb rdb = M.unions [inBoth, servOnly, cliOnly]
     cliOnlyP lws = if wsVersionNum lws <= verLookup (wsReplicaID lws) rvv
       then (Delete, lws)
       else (Keep, lws)
-
-
--- | Look up a ReplicaID in a VersionVector to get a VersionNum, default to 0
-verLookup :: ReplicaID -> VersionVector -> VersionNum
-verLookup = M.findWithDefault 0
 
 
 -- | Fourth phase: The client sets its version vector to contain the
