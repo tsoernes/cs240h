@@ -74,15 +74,16 @@ server r w dir = do
 -- done.
 client :: Bool -> Handle -> Handle -> FilePath -> IO ()
 client turn r w dir = do
-  clogServ $ "Running on directory: " ++ dir
+  clogCli $ "Running on directory: " ++ dir
   ldb <- scanDir dir
   rdb <- receiveDB r
+  -- clogCli $ "Local replica id: " ++ (show $ dbReplicaID ldb)
+  -- clogCli $ "Remote replica id: " ++ (show $ dbReplicaID rdb)
   wss <- mergeState ldb rdb r w dir
   let vvec = updateVersionVec (dbVersionVec ldb) (dbVersionVec rdb)
-  clogCli $ "Merged state: " ++ show wss
+  clogCli $ "Merged write stamps: " ++ show wss
   clogCli $ "Updated version vec: " ++ show vvec
   let ldb' = DB (dbReplicaID ldb) vvec wss
-  clogCli $ "Updated version vec: " ++ show vvec
   writeDB dir ldb'
 
   -- At the end, if `turn == True`, then we issue the TURN command to
@@ -131,10 +132,10 @@ updateWStamp replicaID versionNum (fName, fHash) wStamps =
     upd = M.alter (\_ -> Just $ WStamp fHash replicaID versionNum) fName wStamps
 
 
--- | Second phase: The server sends the client its database.
+-- | Second phase: The server scans its directory and sends the client its database.
 sendDB :: Handle -> FilePath -> IO ()
 sendDB w dir = do
-  db <- loadDB dir
+  db <- scanDir dir
   BSL.hPut w (encode db)
   hPutStrLn w ""
   -- hPutStrLn w (show $ encode db)
@@ -257,8 +258,6 @@ mergeWStamps ldb rdb = M.unions [inBoth, servOnly, cliOnly]
     -- If the file exists only on the client, then delete it only if the server
     -- previously had the client's version of the file or a version derived
     -- from it. In other words, delete only if version(LWS) ≤ RVV!replica(LWS).
-    -- cliOnly = M.map (\ws -> (Delete, ws)) $ M.filter cliOnlyP $ M.difference lwss rwss
-    -- cliOnlyP lws = wsVersionNum lws <= verLookup (wsReplicaID lws) rvv
     cliOnly = M.map cliOnlyP $ M.difference lwss rwss
     cliOnlyP lws = if wsVersionNum lws <= verLookup (wsReplicaID lws) rvv
       then (Delete, lws)

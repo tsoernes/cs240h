@@ -86,21 +86,22 @@ loadDB :: FilePath -> IO DB
 loadDB dir = do
   let dbPath = dir +/+ dbFileName
   fileExists <- doesFileExist dbPath
-  unless fileExists $ writeFile dbPath "" -- Touch empty DB file
-  file <- BS.readFile dbPath
   defDB <- emptyDB
+  unless fileExists $ writeDB dir defDB -- BSL.writeFile dbPath (encode defDB)-- Touch empty DB file
+  file <- BS.readFile dbPath
   let json = decodeStrict file
       -- If the database file is empty or incorrectly formatted,
       -- then create a new DB with a new, randomly generated replicaID
       -- and a VersionVector containing this replica only with a version number of 1
       db = fromMaybe defDB json
-  return db
+  -- Increase local version num
+  return $ db {dbReplicaID = dbReplicaID db + 1}
 
 emptyDB :: IO DB
 emptyDB = do
   gen <- getStdGen
   newReplicaID <- getStdRandom $ randomR (0, maxBound::Int)
-  let def = DB newReplicaID (M.singleton newReplicaID 1) M.empty
+  let def = DB newReplicaID (M.singleton newReplicaID 0) M.empty
   return def
 
 
