@@ -1,0 +1,2 @@
+[section]
+key =   keep  internal    spaces        # but remove leading and trailing

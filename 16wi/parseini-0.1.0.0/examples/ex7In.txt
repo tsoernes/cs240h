@@ -1,0 +1,11 @@
+[section]
+key = value with \
+      escaped newline
+
+    key2="also has an \
+escaped newline"     \
+    ; escaped newlines like the above are removed during parsing
+    ; and remember to strip trailing whitespace
+    ; and comments, including trailing whitespace
+    ; in continued lines!
+

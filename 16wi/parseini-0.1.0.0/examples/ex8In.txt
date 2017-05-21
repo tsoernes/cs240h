@@ -1,0 +1,3 @@
+[section]   ; a comment could go here
+key         ; bare key names are treated as True booleans
+# a comment could also go here

@@ -1,0 +1,6 @@
+[SectionIsCaseInsensitive     "SUBSectionIsCaseSensitive"]
+key =   \
+    FAlse \
+    # line continuations are allowed in any value;
+    # remember to strip trailing whitespace and
+    # comments before parsing!

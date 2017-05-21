@@ -1,0 +1,2 @@
+[sectioniscaseinsensitive "SUBSectionIsCaseSensitive"]
+    key = False

@@ -1,0 +1,2 @@
+[section]
+    key = "a partially    quoted\n     string"
