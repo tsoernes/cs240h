@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module ParseIni
     ( INISectName (..)
     , INIKey
@@ -11,7 +12,9 @@ module ParseIni
     , lookupValue
     ) where
 
+import Data.Char
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as BC
 import qualified Data.Map.Strict as M
 
 
@@ -19,7 +22,7 @@ import qualified Data.Map.Strict as M
 -- These are the types you should use for the results of your parse.
 -- Think carefully about what's going on here!
 
--- |INI files are separated into sections and subsections of key-value pairs.
+-- | INI files are separated into sections and subsections of key-value pairs.
 -- We represent section and subsection identifiers with the INISectName type.
 -- Section names are case insensitive strings; subsection names are case sensitive.
 data INISectName = ISect    { iSect    :: B.ByteString }
@@ -27,21 +30,21 @@ data INISectName = ISect    { iSect    :: B.ByteString }
                             , iSubsect :: B.ByteString }
     deriving (Eq, Ord, Show)
 
--- |Within each (sub)section, an INI file contains a set of keys and values.
+-- | Within each (sub)section, an INI file contains a set of keys and values.
 -- Keys are case insensitive strings.
 type INIKey = B.ByteString
 
--- |After parsing key-value pairs, each value should be assigned a type.
+-- | After parsing key-value pairs, each value should be assigned a type.
 -- We represent these types via the @INIVal@ sum type.
 data INIVal = IBool Bool
             | IInt Integer
             | IString B.ByteString
     deriving (Eq, Ord, Show)
 
--- |An @INISection@ is a map from @INIKey@s to @INIVal@s.
+-- | An @INISection@ is a map from @INIKey@s to @INIVal@s.
 type INISection = M.Map INIKey [INIVal]
 
--- |An @INIFile@ is a map from @INISectName@s to @INISection@s.
+-- | An @INIFile@ is a map from @INISectName@s to @INISection@s.
 type INIFile = M.Map INISectName INISection
 
 
@@ -52,33 +55,40 @@ type INIFile = M.Map INISectName INISection
 -- you handle, e.g., case insensitive string matching in order for
 -- someone to use your INI file parser.
 
--- |Given a section name and possibly a subsection name, return an
+-- | Given a section name and possibly a subsection name, return an
 -- appropriate @INISectName@. This function accounts for the case
 -- insensitivity of the section name.
 toSectName :: String -> Maybe String -> INISectName
-toSectName = undefined
+toSectName sect subsect = let sect' = BC.pack $ map toLower sect
+  in case subsect of
+       Just subsect' -> ISubsect sect' (BC.pack subsect')
+       Nothing -> ISect sect'
 
--- |Given a key name, return an appropriate @INIKey@. This function
+
+-- | Given a key name, return an appropriate @INIKey@. This function
 -- accounts for the case insensitivity of the key name.
 toKey :: String -> INIKey
-toKey = undefined
+toKey = BC.pack . map toLower
 
--- |Look up a section in an @INIFile@.
+
+-- | Look up a section in an @INIFile@.
 lookupSection :: INISectName -> INIFile -> Maybe INISection
 lookupSection = undefined
 
--- |Look up a value in an @INISection@.
-lookupSValue :: INIKey -> INISection -> Maybe [INIVal]
-lookupSValue = undefined
 
--- |Look up a value in an @INIFile@.
+-- | Look up a value in an @INISection@.
+lookupSValue :: INIKey -> INISection -> Maybe [INIVal]
+lookupSValue = M.lookup
+
+
+-- | Look up a value in an @INIFile@.
 lookupValue :: INIKey -> INISectName -> INIFile -> Maybe [INIVal]
-lookupValue = undefined
+lookupValue key sect file = M.lookup sect file >>= M.lookup key
 
 
 -- **** PARSER ****
 
--- |Parse an INI file into an @INIFile@.
+-- | Parse an INI file into an @INIFile@.
 --
 -- An INI file comprises a sequence of sections.
 --
