@@ -51,8 +51,8 @@ parseWildcard = do
   -- If '*' is last, then just consume any and all characters.
   ptrnParsers <- list parsePtrn
   let p = if null ptrnParsers
-      then list charParser
-      else sequenceParserConcat ptrnParsers ||| consParsers charParser p
+            then list charParser
+            else sequenceParserConcat ptrnParsers ||| consParsers charParser p
   return p
 
 -- | Parse set pattern
